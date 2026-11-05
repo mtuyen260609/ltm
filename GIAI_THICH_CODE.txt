@@ -1,0 +1,524 @@
+================================================================================
+           TAI LIEU GIAI THICH CHI TIET MA NGUON BAI TAP LON LAP TRINH MANG
+                      DE TAI: QUAN LY THUOC THEO CONG DUNG
+================================================================================
+
+MUC LUC:
+PHAN I.   TONG QUAN KIEN TRUC VA NGUYEN LY HOAT DONG
+PHAN II.  GIAI THICH CHI TIET TUNG DOAN CODE TRONG TUNG FILE (KEM DOAN CODE)
+PHAN III. LUONG CHAY CHI TIET CUA TUNG CHUC NANG CU THE
+PHAN IV.  LUONG XU LY DA LUONG (MULTI-THREADING ARCHITECTURE)
+PHAN V.   CAC CAU HOI VAN DAP THUONG GAP KHI BAO VE BTL & GOI Y TRA LOI
+
+================================================================================
+PHAN I. TONG QUAN KIEN TRUC VA NGUYEN LY HOAT DONG
+================================================================================
+
+He thong gom 2 phan chinh chay doc lap:
+1. SERVER:
+   - Dong vai tro la may chu quan ly kho du lieu thuoc va cong dung tren bo nho RAM.
+   - Mo cong TCP 5000, hoat dong theo kien truc Da luong (Multi-threading).
+   - Moi Client ket noi toi se duoc tao mot luong (Thread) rieng biet de phuc vu,
+     giup phuc vu dong thoi nhieu Client cung luc ma khong bi nghen mang.
+   - Du lieu duoc dong bo hoa bang tu khoa "synchronized" de dam bao an toan 
+     khi nhieu Client cung doc/ghi dong thoi (Thread-safe).
+
+2. CLIENT:
+   - La ung dung giao dien do hoa Desktop bang Java Swing (JFrame).
+   - Ap dung mo hinh kien truc MVC (Model - View - Controller):
+     + View (BTLLTM.java): Chi chua giao dien (bang bieu, nut bam, hop thong bao),
+       tuyet doi khong viet code ket noi Socket truc tiep trong nay.
+     + Model (Thuoc.java, CongDung.java): Cac lop dinh nghia thong tin thuc the.
+     + Service (ClientService.java): Tang ket noi Socket, gui va nhan du lieu voi Server.
+     + Controller (ClientController.java): Cau noi dieu phoi, bat su kien click chuot 
+       tu View, goi Service xu ly, roi do nguoc du lieu ve View.
+   - Su dung SwingWorker: Moi thao tac mang deu duoc day vao luong chay ngam 
+     (Background Thread), giup giao dien khong bao gio bi do, treo (Not Responding).
+
+3. GIAO THUC TRUYEN TIN (PROTOCOL):
+   - Client va Server giao tiep bang cac chuoi van ban UTF-8 qua DataInputStream / DataOutputStream.
+   - Dinh dang thong diep:
+     + Lenh Client gui: "<TEN_LENH>" hoac "<TEN_LENH>|<THAM_SO>"
+     + Server tra loi: "OK|<DU_LIEU_HOAC_THONG_BAO>" neu thanh cong.
+     + Server tra loi: "ERROR|<NOI_DUNG_LOI>" neu that bai.
+   - Du lieu dang bang (danh sach thuoc/cong dung) duoc ma hoa Base64 UTF-8:
+     + Cac truong trong 1 dong noi voi nhau bang dau cham (.)
+     + Cac dong noi voi nhau bang dau cham phay (;)
+     + Giup tranh triet de loi ky tu tieng Viet, dau cach, dau phay hoac ky tu dac biet.
+
+
+================================================================================
+PHAN II. GIAI THICH CHI TIET TUNG DOAN CODE TRONG TUNG FILE
+================================================================================
+
+--------------------------------------------------------------------------------
+1. FILE Server.java
+--------------------------------------------------------------------------------
+Doan code 1: Khoi tao ServerSocket va cong ket noi
+```java
+Store store = new Store();
+try (ServerSocket serverSocket = new ServerSocket(PORT)) { ... }
+```
+- Giai thich:
+  + "Store store = new Store();": Khoi tao duy nhat mot doi tuong kho chua du lieu 
+    de tat ca cac ClientHandler sau nay dung chung.
+  + "new ServerSocket(PORT)": Mo cong mang TCP (port 5000) tren he dieu hanh de 
+    lang nghe cac yeu cau ket noi tu Client.
+  + Cu phap try-with-resources: Dam bao khi Server tat hoac co loi thi cong 5000 
+    se duoc dong lai, tranh bi chiem dung cong (Address already in use).
+
+Doan code 2: Vong lap lang nghe va cap phat da luong
+```java
+while (true) {
+    Socket socket = serverSocket.accept();
+    ClientHandler handler = new ClientHandler(socket, store);
+    Thread thread = new Thread(handler);
+    thread.start();
+}
+```
+- Giai thich:
+  + "serverSocket.accept()": Day la ham chan (blocking call). Server se dung doi 
+    tai day, khi co Client ket noi toi thi moi chay tiep va tra ve doi tuong Socket.
+  + "new ClientHandler(socket, store)": Goi phan viec xu ly cho mot doi tuong moi, 
+    truyen Socket cua Client do va kho du lieu dung chung "store".
+  + "new Thread(handler); thread.start();": Tao va kich hoat mot luong (Thread) 
+    doc lap cho Client do. Luc nay, luong chinh (Main Thread) ngay lap tuc quay lai 
+    dau vong lap while de doi Client tiep theo, khong bi nghen.
+
+
+--------------------------------------------------------------------------------
+2. FILE ClientHandler.java
+--------------------------------------------------------------------------------
+Doan code 1: Luong xu ly va doc du lieu lien tuc
+```java
+DataInputStream in = new DataInputStream(socket.getInputStream());
+DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+while (true) {
+    String request;
+    try {
+        request = in.readUTF();
+    } catch (EOFException e) {
+        break;
+    }
+    if (request == null || request.equals("QUIT")) {
+        break;
+    }
+    String response = xuLyYeuCau(request);
+    out.writeUTF(response);
+    out.flush();
+}
+```
+- Giai thich:
+  + "DataInputStream / DataOutputStream": Luong doc/ghi du lieu dang chuoi van ban UTF-8.
+  + "in.readUTF()": Doc yeu cau tu Client.
+  + "catch (EOFException e)": Khi Client dong Socket ket noi, lenh readUTF se nem 
+    ra ngoai le EOFException (End-of-file). Lenh "break;" giup thoat khoi vong lap 
+    an toan ma khong gay crash chuong trinh.
+  + "out.writeUTF(response); out.flush();": Gui phan hoi ve Client va day het 
+    du lieu trong bo dem qua mang ngay lap tuc.
+
+Doan code 2: Xu ly cac loai yeu cau (xuLyYeuCau)
+```java
+if (request.equals(Protocol.LIST_THUOC)) {
+    List<Thuoc> ds = store.getDanhSachThuoc();
+    List<String[]> rows = new ArrayList<>();
+    for (Thuoc t : ds) {
+        rows.add(new String[]{
+            t.getMaThuoc(), t.getTenThuoc(), t.getGia(), t.getCongDung(), t.getDangThuoc()
+        });
+    }
+    return Protocol.success(Protocol.encodeRows(rows));
+}
+```
+- Giai thich:
+  + Lay danh sach tu Store, chuyen doi tung doi tuong Thuoc thanh mang chuoi 5 cot.
+  + "Protocol.encodeRows(rows)": Ma hoa toan bo danh sach thanh chuoi Base64 phan tach.
+  + "Protocol.success(...)": Gan them tien to "OK|" vao dau de Client biet la thanh cong.
+
+Doan code 3: Xu ly xoa cong dung kem kiem tra rang buoc
+```java
+if (request.startsWith(Protocol.XOA_CONGDUNG + "|")) {
+    String ma = request.substring((Protocol.XOA_CONGDUNG + "|").length()).trim();
+    try {
+        String result = store.xoaCongDung(ma);
+        if (result != null) return Protocol.success(result);
+        return Protocol.error("Khong tim thay cong dung co ma: " + ma);
+    } catch (IllegalStateException e) {
+        return Protocol.error(e.getMessage());
+    }
+}
+```
+- Giai thich:
+  + Cat chuoi de lay ma cong dung sau ky tu "|".
+  + Goi ham "store.xoaCongDung(ma)".
+  + Neu Store phat hien co thuoc dang dung cong dung nay, no se nem "IllegalStateException". 
+    Khoi catch se bat duoc va tra ve "Protocol.error(e.getMessage())" de bao ve Client.
+
+
+--------------------------------------------------------------------------------
+3. FILE Store.java
+--------------------------------------------------------------------------------
+Doan code 1: Dong bo hoa va chong loi ConcurrentModificationException
+```java
+public synchronized List<Thuoc> getDanhSachThuoc() {
+    return new ArrayList<>(danhSachThuoc);
+}
+```
+- Giai thich:
+  + "synchronized": Tai mot thoi diem, chi co 1 Thread duoc phep thuc thi ham nay. 
+    Tranh truong hop Client A dang doc danh sach thi Client B dang xoa thuoc lam hong du lieu.
+  + "new ArrayList<>(danhSachThuoc)": Tra ve mot BAN SAO (copy) cua danh sach. 
+    Nho do, neu sau nay co luong khac sua danhSachThuoc goc thi luong dang duyet 
+    khong bi loi xung dot bo nho.
+
+Doan code 2: Kiem tra rang buoc toan ven khi xoa cong dung (Khoa ngoai)
+```java
+public synchronized String xoaCongDung(String ma) throws IllegalStateException {
+    ...
+    for (Thuoc t : danhSachThuoc) {
+        if (t.getCongDung().equalsIgnoreCase(found.getTenCongDung())
+                || t.getCongDung().equalsIgnoreCase(found.getMaCongDung())) {
+            throw new IllegalStateException("Khong the xoa '" + found.getTenCongDung()
+                    + "' vi dang duoc su dung boi thuoc '" + t.getTenThuoc() + "' (" + t.getMaThuoc() + ").");
+        }
+    }
+    danhSachCongDung.remove(foundIndex);
+    return "Da xoa cong dung " + found.getTenCongDung() + " - Ma: " + found.getMaCongDung();
+}
+```
+- Giai thich:
+  + Vong lap for kiem tra toan bo thuoc trong kho: Neu co thuoc nao co cong dung 
+    trung voi cong dung muon xoa -> Nem ngay ngoai le va dung lai, khong cho phep xoa.
+  + Chi khi khong co bat ky thuoc nao lien ket, lenh "danhSachCongDung.remove()" 
+    moi duoc chay. Day chinh la co che bao ve toan ven du lieu (Foreign Key Constraint).
+
+
+--------------------------------------------------------------------------------
+4. FILE Protocol.java
+--------------------------------------------------------------------------------
+Doan code 1: Ma hoa va giai ma Base64 tung truong du lieu
+```java
+public static String encode(String value) {
+    if (value == null) value = "";
+    return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+}
+public static String decode(String value) {
+    if (value == null || value.isEmpty()) return "";
+    try {
+        return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+    } catch (IllegalArgumentException e) {
+        return value;
+    }
+}
+```
+- Giai thich:
+  + "StandardCharsets.UTF_8": Chuyen doi chuoi tieng Viet co dau thanh mang byte chuan.
+  + "Base64.getEncoder().encodeToString(...)": Bien mang byte thanh chuoi ky tu ASCII an toan.
+  + Co kiem tra null va bat ngoai le de tranh bi crash khi du lieu rong hoac bi sai format.
+
+Doan code 2: Dong goi va giai ma bang du lieu (encodeRows / decodeRows)
+```java
+// Dong goi:
+for (String[] row : rows) {
+    if (result.length() > 0) result.append(";");
+    for (int i = 0; i < row.length; i++) {
+        if (i > 0) result.append(".");
+        result.append(encode(row[i]));
+    }
+}
+// Giai ma:
+String[] rows = data.split(";", -1);
+for (String row : rows) {
+    String[] fields = row.split("\\.", -1);
+    ...
+    decoded[i] = decode(fields[i]);
+}
+```
+- Giai thich:
+  + Moi o du lieu duoc encode Base64. Cac o trong 1 dong ghep boi dau cham (.).
+  + Cac dong ghep boi dau cham phay (;).
+  + Khi giai ma: Tach theo ";" de duoc cac dong, tach theo "\\." de lay tung o va giai ma Base64.
+
+
+--------------------------------------------------------------------------------
+5. FILE ClientService.java
+--------------------------------------------------------------------------------
+Doan code 1: Gui yeu cau Socket va bat loi mat ket noi
+```java
+private String guiYeuCau(String request) throws IOException {
+    try (
+        Socket socket = new Socket(host, port);
+        DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+        DataInputStream in = new DataInputStream(socket.getInputStream())
+    ) {
+        socket.setSoTimeout(5000);
+        out.writeUTF(request);
+        out.flush();
+        return in.readUTF();
+    } catch (ConnectException e) {
+        throw new IOException("Khong the ket noi toi Server tai " + host + ":" + port + ". Vui long bat Server truoc khi chay Client!");
+    }
+}
+```
+- Giai thich:
+  + "new Socket(host, port)": Mo ket noi TCP toi Server (127.0.0.1:5000).
+  + "socket.setSoTimeout(5000)": Neu sau 5 giay Server khong tra loi thi tu dong huy, tranh bi treo vo han.
+  + "catch (ConnectException e)": Bat truong hop nguoi dung quen chua bat Server, 
+    nem ra thong bao tieng Viet de hien thi ro rang tren giao dien.
+
+Doan code 2: Kiem tra ket qua tra ve
+```java
+private String kiemTraPhanHoi(String response) throws IOException {
+    String[] parts = response.split("\\|", 2);
+    if (parts[0].equals("ERROR")) {
+        throw new IOException(parts[1]);
+    }
+    if (!parts[0].equals("OK")) {
+        throw new IOException("Khong xac dinh duoc phan hoi tu Server.");
+    }
+    return parts[1];
+}
+```
+- Giai thich:
+  + Tach chuoi theo ky tu "|". Neu Server tra ve "ERROR|Ly do", ham se nem ngay IOException 
+    chua dung "Ly do" do de Controller bat duoc va hien thi len man hinh.
+
+
+--------------------------------------------------------------------------------
+6. FILE BTLLTM.java
+--------------------------------------------------------------------------------
+Doan code 1: Khong cho phep sua truc tiep tren bang JTable
+```java
+modelThuoc = new DefaultTableModel(headers, 0) {
+    @Override
+    public boolean isCellEditable(int row, int column) {
+        return false;
+    }
+};
+```
+- Giai thich:
+  + Mac dinh DefaultTableModel cho nguoi dung click dup sua chu tren o. 
+  + Ghi de ham "isCellEditable" tra ve "false" de khoa chuc nang sua o, 
+    dam bao nguoi dung chi co the xem va chon dong de xoa, tranh sai lech du lieu.
+
+Doan code 2: Ham main khoi tao chuan mo hinh MVC
+```java
+public static void main(String[] args) {
+    SwingUtilities.invokeLater(() -> {
+        BTLLTM view = new BTLLTM();
+        ClientService service = new ClientService("127.0.0.1", 5000);
+        new ClientController(view, service);
+        view.setVisible(true);
+    });
+}
+```
+- Giai thich:
+  + "SwingUtilities.invokeLater": Day viec khoi tao giao dien vao luong su kien EDT cua Swing.
+  + Khoi tao View rieng, Service rieng, sau do truyen ca hai vao Controller de quan ly. 
+    Day la kien truc chuan cua mo hinh MVC.
+
+
+--------------------------------------------------------------------------------
+7. FILE ClientController.java
+--------------------------------------------------------------------------------
+Doan code 1: Tai du lieu ban dau bang SwingWorker
+```java
+new SwingWorker<List<List<String[]>>, Void>() {
+    @Override
+    protected List<List<String[]>> doInBackground() throws Exception {
+        List<List<String[]>> ketQua = new ArrayList<>();
+        ketQua.add(service.layDanhSachThuoc());
+        ketQua.add(service.layDanhSachCongDung());
+        return ketQua;
+    }
+    @Override
+    protected void done() {
+        try {
+            List<List<String[]>> data = get();
+            view.hienThiDanhSachThuoc(data.get(0));
+            view.hienThiDanhSachCongDung(data.get(1));
+            view.hienThiKetQua("Da ket noi Server va tai du lieu thanh cong.");
+        } catch (Exception e) {
+            Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+            view.hienThiKetQua("LOI KET NOI: " + cause.getMessage());
+        }
+    }
+}.execute();
+```
+- Giai thich:
+  + "doInBackground()": Chay tren LUONG NGAM (Background Thread). Goi service de lay du lieu tu mang.
+  + "done()": Tu dong chay tren LUONG GIAO DIEN (EDT) khi doInBackground xong. 
+    Nhan ket qua bang "get()" va do vao 2 bang JTable.
+  + "e.getCause()": Khi SwingWorker bi loi, no se boc ngoai le trong ExecutionException. 
+    Dung e.getCause() se lay dung thong diep loi goc de in ra giao dien.
+
+Doan code 2: Xu ly xoa thuoc kem hop thoai xac nhan
+```java
+int row = view.getTableThuoc().getSelectedRow();
+if (row == -1) {
+    view.hienThiKetQua("THAT BAI: Hay chon thuoc can xoa.");
+    return;
+}
+String ma = view.getTableThuoc().getValueAt(row, 0).toString();
+String ten = view.getTableThuoc().getValueAt(row, 1).toString();
+int confirm = JOptionPane.showConfirmDialog(view, "Ban co chac muon xoa thuoc " + ten + " (Ma: " + ma + ")?", ...);
+if (confirm != JOptionPane.YES_OPTION) return;
+view.getBtnXoaThuoc().setEnabled(false);
+```
+- Giai thich:
+  + Kiem tra nguoi dung co click chon dong nao khong (row == -1 la chua chon).
+  + Lay ma thuoc o cot 0 va ten thuoc o cot 1.
+  + Hien thi hop thoai hoi xac nhan (ConfirmDialog). Neu chon No/Cancel thi dung lai.
+  + "setEnabled(false)": Vo hieu hoa nut xoa ngay lap tuc de nguoi dung khong bam nhieu lan lien tuc.
+
+
+================================================================================
+PHAN III. LUONG CHAY CHI TIET CUA TUNG CHUC NANG CU THE
+================================================================================
+
+--------------------------------------------------------------------------------
+Chuc nang 1: Khoi dong va Ket noi mang Server - Client
+--------------------------------------------------------------------------------
+1. Nguoi dung chay Server.java:
+   - Server.main() -> new Store() (nap 13 thuoc va 7 cong dung tren RAM).
+   - Mo cong: new ServerSocket(5000).
+   - Server dung tai lenh: serverSocket.accept() cho Client toi.
+2. Nguoi dung chay BTLLTM.java:
+   - BTLLTM.main() -> Khoi tao giao dien (View).
+   - Khoi tao ClientService("127.0.0.1", 5000).
+   - Khoi tao ClientController(view, service).
+   - Controller goi taiDuLieuBanDau().
+   - Controller tao SwingWorker mo Socket toi 127.0.0.1:5000.
+3. Server chap nhan ket noi:
+   - serverSocket.accept() nhan ket noi, in: "Client ket noi: /127.0.0.1".
+   - Server tao Thread moi chay ClientHandler.
+4. Client gui 2 lenh:
+   - Lenh 1: "LIST_THUOC" -> Server tra ve ma tran thuoc ma hoa -> Client giai ma va hien thi Tab 1.
+   - Lenh 2: "LIST_CONGDUNG" -> Server tra ve ma tran cong dung -> Client giai ma va hien thi Tab 2.
+5. Hop ket qua in: "Da ket noi Server va tai du lieu thanh cong."
+
+--------------------------------------------------------------------------------
+Chuc nang 2: Xem danh sach Thuoc va Cong dung
+--------------------------------------------------------------------------------
+1. Nguoi dung click qua lai giua 2 Tab tren giao dien:
+   - Tab "Xoa thuoc": Hien thi bang 5 cot (Ma thuoc, Ten thuoc, Gia, Cong dung, Dang thuoc).
+   - Tab "Xoa cong dung": Hien thi bang 3 cot (Ma cong dung, Ten cong dung, Mo ta).
+2. Du lieu duoc hien thi qua DefaultTableModel, cac o bi khoa khong cho sua de bao ve tinh toan ven.
+
+--------------------------------------------------------------------------------
+Chuc nang 3: Xoa mot loai thuoc da chon
+--------------------------------------------------------------------------------
+1. Nguoi dung vao Tab "Xoa thuoc", click chon dong: "T002 | Efferalgan 500mg | ...".
+2. Nguoi dung bam nut "Xoa thuoc da chon":
+   - Controller bat su kien click qua ActionListener.
+   - Lay ma thuoc "T002", hien hop thoai: "Ban co chac muon xoa thuoc Efferalgan 500mg (Ma: T002)?".
+3. Nguoi dung bam "Yes":
+   - Nut xoa bi lam mo (disable).
+   - SwingWorker chay ngam:
+     + Goi service.xoaThuoc("T002") -> Gui chuoi "XOA_THUOC|T002" qua Socket.
+     + Server tiep nhan lenh tai ClientHandler -> Goi Store.xoaThuoc("T002").
+     + Store tim thay "T002" trong danhSachThuoc -> remove phan tu -> Tra ve thong bao.
+     + Server phan hoi: "OK|Da xoa thuoc Efferalgan 500mg - Ma: T002".
+     + Client nhan ket qua "OK", tiep tuc gui lenh ngam "LIST_THUOC" de lay danh sach sau khi xoa.
+4. Khi SwingWorker hoan thanh (ham done):
+   - Nut xoa duoc bat sang tro lai (enable).
+   - Bang tableThuoc duoc cap nhat (dong T002 bien mat).
+   - Hop ket qua hien: "THANH CONG: Da xoa thuoc Efferalgan 500mg - Ma: T002".
+
+--------------------------------------------------------------------------------
+Chuc nang 4: Xoa cong dung bi chan do rang buoc toan ven (Vi pham khoa ngoai)
+--------------------------------------------------------------------------------
+1. Nguoi dung chuyen sang Tab "Xoa cong dung", chon dong: "CD01 | Giam dau ha sot | ...".
+2. Nguoi dung bam nut "Xoa cong dung da chon" -> Bam "Yes" xac nhan.
+3. Client gui lenh qua Socket: "XOA_CONGDUNG|CD01".
+4. Server tiep nhan:
+   - ClientHandler goi: store.xoaCongDung("CD01").
+   - Store kiem tra trong danhSachThuoc: Phat hien cac thuoc T001 (Paracetamol), T003 (Hapacol)... 
+     van dang mang cong dung "Giam dau ha sot".
+   - Store nem ngoai le: 
+     throw new IllegalStateException("Khong the xoa 'Giam dau ha sot' vi dang duoc su dung boi thuoc 'Paracetamol 500mg' (T001).");
+5. ClientHandler bat ngoai le nay va tra ve Client:
+   "ERROR|Khong the xoa 'Giam dau ha sot' vi dang duoc su dung boi thuoc 'Paracetamol 500mg' (T001)."
+6. ClientService phat hien chu "ERROR" -> Nem IOException chua thong diep do.
+7. ClientController bat IOException qua e.getCause() va in len hop thong bao mau do:
+   "THAT BAI: Khong the xoa 'Giam dau ha sot' vi dang duoc su dung boi thuoc 'Paracetamol 500mg' (T001)."
+8. Cong dung CD01 van duoc giu nguyen tren bang, khong bi mat di.
+
+--------------------------------------------------------------------------------
+Chuc nang 5: Xoa cong dung thanh cong (Khong co thuoc lien ket)
+--------------------------------------------------------------------------------
+1. Nguoi dung chuyen sang Tab "Xoa cong dung", chon dong: "CD07 | Bo mat - Sang mat | ...".
+   *(Day la cong dung mau duoc thiet ke chua co thuoc nao dung de test chuc nang)*.
+2. Nguoi dung bam nut "Xoa cong dung da chon" -> Bam "Yes" xac nhan.
+3. Client gui: "XOA_CONGDUNG|CD07".
+4. Server kiem tra Store: Khong co thuoc nao su dung cong dung CD07.
+5. Store tien hanh xoa CD07 khoi danhSachCongDung va tra ve:
+   "OK|Da xoa cong dung Bo mat - Sang mat - Ma: CD07".
+6. Client tai lai danh sach cong dung moi -> Dong CD07 bien mat khoi bang.
+7. Hop ket qua in: "THANH CONG: Da xoa cong dung Bo mat - Sang mat - Ma: CD07".
+
+--------------------------------------------------------------------------------
+Chuc nang 6: Xu ly loi mat ket noi hoac chua bat Server
+--------------------------------------------------------------------------------
+1. Gia su Server chua duoc bat ma nguoi dung mo ngay BTLLTM.java.
+2. ClientService goi "new Socket(host, port)":
+   - He dieu hanh nem ra ConnectException (Connection refused).
+3. Khoi catch trong ClientService bat duoc va nem:
+   IOException: "Khong the ket noi toi Server tai 127.0.0.1:5000. Vui long bat Server truoc khi chay Client!"
+4. Controller nhan duoc loi va hien thi ngay tren o ket qua:
+   "LOI KET NOI: Khong the ket noi toi Server tai 127.0.0.1:5000. Vui long bat Server truoc khi chay Client!"
+   -> Giao dien van mo binh thuong, khong bi crash hoac treo do.
+
+
+================================================================================
+PHAN IV. LUONG XU LY DA LUONG (MULTI-THREADING ARCHITECTURE)
+================================================================================
+
+1. PHIA SERVER:
+   - Main Thread: Chuyen chay vong lap vo han accept() de don Client.
+   - ClientHandler Threads: Moi khi co 1 Socket ket noi den, mot Thread moi duoc cap phat 
+     (Thread thread = new Thread(handler); thread.start();). Cac luong nay hoat dong doc lap, 
+     phuc vu nhieu Client dong thoi.
+   - Store Lock: Khi nhieu ClientHandler Thread cung muon sua Store, co che synchronized se 
+     tao hang doi (Monitor Lock) cho tung luong thuc hien, dam bao an toan 100%.
+
+2. PHIA CLIENT:
+   - Main Thread: Khoi dong chuong trinh.
+   - Swing Event Dispatch Thread (EDT): Luong chuyen trach quan ly giao dien, ve cac 
+     Component va bat su kien click chuot.
+   - SwingWorker Background Thread: Luong ngam thuc hien I/O mang (gui nhan Socket qua mang LAN/Internet). 
+     Nho tach rieng luong nay ma khi cho Server phan hoi, nguoi dung van co the keo tha, phong to, 
+     thu nho cua so ma khong bao gio bi hien tuong treo ung dung.
+
+
+================================================================================
+PHAN V. CAC CAU HOI VAN DAP THUONG GAP KHI BAO VE BTL & GOI Y TRA LOI
+================================================================================
+
+Cau 1: Tai sao Server phai su dung da luong (Multi-threading)?
+-> Tra loi: Neu khong dung da luong, khi mot Client ket noi va gui yeu cau thi Server se bi 
+blocked (nghen). Tat ca cac Client khac se phai cho den khi Client dau tien ngat ket noi. 
+Viec tao moi mot Thread cho moi ket noi (ClientHandler) giup Server phuc vu dong thoi hang tram 
+Client cung luc.
+
+Cau 2: Tu khoa "synchronized" trong Store.java co y nghia gi?
+-> Tra loi: Vi Server la da luong, neu 2 Client cung bam xoa hoac doc du lieu tai cung mot thoi diem 
+thi se xay ra xung dot du lieu (Race Condition / ConcurrentModificationException). Tu khoa "synchronized" 
+dam bao tai mot thoi diem chi co duy nhat 1 luong duoc thao tac tren kho du lieu.
+
+Cau 3: Tai sao lai phai ma hoa Base64 trong Protocol ma khong gui truc tiep?
+-> Tra loi: Du lieu gom cac chuoi tieng Viet, co the chua dau phay, dau cham, khoang trang hoac 
+ky tu xuong dong. Neu khong ma hoa, khi dung ham split() se rat de bi cat nham cot, dan toi sai lech du lieu. 
+Ma hoa Base64 dam bao moi chuoi chi gom cac ky tu ASCII tieu chuan an toan tuyet doi khi truyen qua Socket.
+
+Cau 4: Tai sao phia Client khong goi truc tiep Server ma phai dung SwingWorker?
+-> Tra loi: Giao dien Java Swing chay tren mot luong duy nhat la EDT (Event Dispatch Thread). 
+Neu thuc hien ket noi mang tren luong nay, khi mang cham hoac Server chua phan hoi thi toan bo cua so 
+giao dien se bi "Not Responding" (do, treo). SwingWorker giup day viec gui/nhan mang xuong luong nen 
+(Background Thread), giu cho giao dien luon muot ma.
+
+Cau 5: Rang buoc toan ven du lieu (Foreign Key Constraint) duoc thuc hien the nao?
+-> Tra loi: Trong Store.java, truoc khi xoa mot cong dung, he thong duyet qua danh sach tat ca cac 
+loai thuoc hien co. Neu co bat ky loai thuoc nao dang tham chieu toi cong dung nay thi Server lap tuc 
+tu choi xoa va nem ngoai le thong bao ro ten loai thuoc dang vi pham rang buoc.
+================================================================================

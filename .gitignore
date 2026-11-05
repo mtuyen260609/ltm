@@ -1,0 +1,8 @@
+# NetBeans build output
+build/
+dist/
+nbproject/private/
+
+# IDE files
+.idea/
+*.iml
